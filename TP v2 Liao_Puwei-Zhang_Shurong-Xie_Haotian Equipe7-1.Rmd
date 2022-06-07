@@ -1,0 +1,407 @@
+---
+title: "TP3"
+author: "zhang"
+date: "4/22/2022"
+output: html_document
+---
+
+
+```{r}
+library(tidyverse)
+```
+
+Exo1:
+
+1.1)
+```{r}
+#setwd("~/Users/shurongzhang/Downloads/TPbuzz")
+twitter=read_csv2("twitter_small.csv")
+
+summary(twitter)
+nb_var=length(colnames(twitter))
+nb_indivi=length(twitter[,1])
+```
+
+1.2)
+
+Histogramme pour les variables explicatives au temps 0 et pour le label:
+
+```{r}
+
+hist(twitter$NCD_0)
+hist(twitter$AI_0)
+hist(twitter$ASNA_0)
+hist(twitter$BL_0)
+hist(twitter$NAC_0)
+hist(twitter$ASNAC_0)
+hist(twitter$CS_0)
+hist(twitter$AT_0)
+hist(twitter$NA_0)
+hist(twitter$ADL_0)
+hist(twitter$NAD_0)
+hist(twitter$label)
+
+
+
+```
+
+A partir de ces histogrammes, on peut modéliser les différentes variables par les lois de poisson avec des paramètres différents. 
+
+
+1.3)
+Transformation log (appliqué à la variable +1) pour toutes les features dont le maximum dépasse 5:
+
+```{r}
+for (i in 1:(nb_var-1)){
+  if(max(twitter[,i])>5){
+    twitter[,i]=log(twitter[,i]+1)
+  }
+}
+```
+
+
+
+1.4)
+80% Training-set et 20% Test-set
+
+```{r}
+library(splitTools)
+library(ranger)
+
+dt = sort(sample(nrow(twitter), nrow(twitter)*.8))
+train<-twitter[dt,]
+test<-twitter[-dt,]
+```
+
+
+
+
+1.5)
+la moyenne et l’écart-type sur le train et standardisé les features du train et du test avec ces valeurs pour chaque feature:
+
+```{r}
+# Charger les packages R requis
+library(dplyr)
+
+# Préparation des données
+df <- as_tibble(train)
+head(df)
+
+
+# Calculer la moyenne et le sd de toutes les colonnes numériques
+df %>%
+  summarise(across(
+    .cols = is.numeric, 
+    .fns = list(Mean = mean, SD = sd), na.rm = TRUE, 
+    .names = "{col}_{fn}"
+    ))
+
+```
+
+
+
+EXO2
+2.1
+Premier modèle poissonnien en compte toutes les features:
+```{r}
+poisson_all = glm(label ~.,data=train,family ="poisson")
+summary(poisson_all)
+```
+
+2.2
+```{r}
+label_P=predict(poisson_all, test)
+```
+
+Prédictions obtenues avec le modèle sur les individus du train:
+```{r}
+label_P_train=predict(poisson_all, train)
+```
+
+Prédictions obtenues avec le modèle sur les individus du test:
+```{r}
+label_P_test=predict(poisson_all, test)
+```
+
+
+
+
+
+2.3)
+L'algorithme errors permet de trouver les logMSE et les MAPE de training-set et de test-set du modèle.
+```{r}
+#fit,X_test,Y_test
+
+errors = function( y_pred_train , y_pred_test , 
+                   y_train, y_test){
+  # y_pred_train : vector of predictions on train
+  # y_pred_test :
+  # y_train 
+  # y_test :
+  if (length(y_pred_train)!=length(y_train)){
+    print("y_pred_train and y_train do not have the same length")
+  }
+  logMSE_train = mean( ( log(y_train+1) - log(y_pred_train+1) )^2 ,
+                       na.rm = T)
+  logMSE_test = mean( (log(y_test+1) - log(y_pred_test+1) )^2,
+                      na.rm = T)
+  MAPE_train = mean( abs(y_train - y_pred_train)/(y_train+1),
+                    na.rm = T)
+  MAPE_test = mean( abs(y_test - y_pred_test)/(y_test+1),
+                   na.rm = T)
+  return( list(logMSE_train=logMSE_train,logMSE_test=logMSE_test,
+               MAPE_train= MAPE_train,MAPE_test= MAPE_test))
+}
+```
+
+2.4)
+
+
+On calcule logMSE et MAPE de modèle poisionnien et les moyennes:
+```{r}
+errors_full1 = data.frame(errors(label_P_train,label_P_test,train$label,test$label))
+rownames(errors_full1)<-c("errors_full1")
+
+Y_pred_train_null = rep(mean(train$label),nrow(train))
+Y_pred_test_null = rep(mean(test$label),nrow(test))
+errors_null = data.frame(errors(Y_pred_train_null,Y_pred_test_null,train$label,test$label))
+rownames(errors_null)<-c("errors_null")
+
+errors_all = rbind(errors_full1,errors_null)
+
+errors_all
+```
+
+
+On peut constater que le modèle poisionnien a une beaucoup plus petite valeur en MAPE par rapport aux moyennes.
+
+
+EXO3
+3.1)
+Une pénalisation elastic-net au modèle précédent (en prenant \alpha = 0.8) et en considérant 3 folds pour la cross-validation:
+```{r}
+
+X_train_interaction = model.matrix((poisson_all))
+#X_train_interaction = data.frame(poisson_all)
+
+library(glmnet)
+library(Matrix)
+Y_train = train$label
+
+poisson_lasso=cv.glmnet(X_train_interaction, Y_train, family="poisson", alpha = 0.8,nfolds = 3)
+```
+
+```{r}
+summary(poisson_lasso)
+```
+
+
+3.2)
+```{r}
+which(as.matrix(coef(poisson_lasso)!=0))# Trouver les indices de variables qui ont une coefficient non nuls pour modèle poisson_lasso
+
+X_train_interaction[1:10,1:10]
+```
+
+
+```{r}
+selected_features = c(1,which(as.matrix(coef(poisson_lasso))!=0)[-1]-1)# Features selection: trouver les variables discriminantes
+
+X_train_interaction[1:10,1:10]
+```
+
+```{r}
+coef(poisson_lasso)#Voir les coefficients de ces variables
+```
+
+
+```{r}
+length(as.matrix(coef(poisson_lasso)!=0))
+```
+
+
+```{r}
+# Refit le modèle glm avec ces variables
+X_train_interaction[,selected_features]
+
+glm_selected = glm.fit(X_train_interaction[,selected_features], train$label, family = poisson())
+```
+
+```{r}
+summary(glm_selected)
+```
+
+
+```{r}
+glm_selected = glm(train$label ~ X_train_interaction[,selected_features] -1, family = "poisson")
+```
+
+```{r}
+summary(glm_selected)
+```
+
+```{r}
+library(caret)
+X_train=train[,-67]
+Y_train=train[,67]
+X_test=test[,-67]
+Y_test=test[,67]
+cctrl1 <- trainControl(method = "cv", number = 3)
+fit_complet <- train(X_train, train$label, 
+                             method = "glm",
+                             family = poisson,
+                             trControl = cctrl1)
+fit_complet
+Y_pred_train_complet = predict(fit_complet)
+Y_pred_test_complet = predict(fit_complet,newdata = X_test)
+```
+
+
+
+
+
+
+
+```{r}
+selected_features = c(1,which(as.matrix(coef(poisson_lasso))!=0)[-1]-1)
+
+poisson_lasso_refit = glm(train$label ~ X_train_interaction[,selected_features] -1, family = "poisson")
+
+
+summary(poisson_lasso_refit)
+```
+
+3.3
+
+Calculer la MAPE et le log-MSE de ces deux modèles
+```{r}
+#fit,X_test,Y_test
+
+errors = function( y_pred_train , y_pred_test , 
+                   y_train, y_test){
+  # y_pred_train : vector of predictions on train
+  # y_pred_test :
+  # y_train 
+  # y_test :
+  if (length(y_pred_train)!=length(y_train)){
+    print("y_pred_train and y_train do not have the same length")
+  }
+  logMSE_train = mean( ( log(y_train+1) - log(y_pred_train+1) )^2 ,
+                       na.rm = T)
+  logMSE_test = mean( (log(y_test+1) - log(y_pred_test+1) )^2,
+                      na.rm = T)
+  MAPE_train = mean( abs(y_train - y_pred_train)/(y_train+1),
+                    na.rm = T)
+  MAPE_test = mean( abs(y_test - y_pred_test)/(y_test+1),
+                   na.rm = T)
+  return( list(logMSE_train=logMSE_train,logMSE_test=logMSE_test,
+               MAPE_train= MAPE_train,MAPE_test= MAPE_test))
+}
+
+errors_full = errors(Y_pred_train_complet,Y_pred_test_complet,train$label,test$label)
+print(errors_full)
+
+Y_pred_train_null = rep(mean(train$label),nrow(train))
+Y_pred_test_null = rep(mean(test$label),nrow(test))
+errors_null = errors(Y_pred_train_null,Y_pred_test_null,train$label,test$label)
+print(errors_null)
+errors_all = rbind(errors_full,errors_null)
+```
+
+```{r}
+errors_full
+
+errors_all
+```
+
+On voit que les nouveaux modèles ont une meilleures performances que le précédent,car ils ont une plus petites valeur en logMse et en MAPE. 
+
+
+```{r}
+X2=model.matrix(poisson_lasso_refit)
+X2=X2[,-1]
+X_train2=X2[1:31969,]
+X_test2=X2[31970:40000,]
+
+X2B=data.frame(X_train2)
+X_train2_label=twitter[which(X2B$X_train_interaction...selected_features.NCD_0==twitter$NCD_0),]$label
+
+X2T=data.frame(X_test2)
+X_test2_label=twitter[which(X2T$X_train_interaction...selected_features.NCD_0==twitter$NCD_0),]$label
+```
+
+
+```{r}
+fit_aic <- train(X_train2,train[1:31969,]$label, 
+                             method = "glmStepAIC",
+                             family = poisson,
+                             trControl = cctrl1)
+#save(fit_aic,file = "./fit_aic")
+#load("./fit_aic")
+Y_pred_train_aic = predict(fit_aic)
+Y_pred_test_aic = predict(fit_aic,newdata = X_test2)
+errors_aic = errors(Y_pred_train_aic,Y_pred_test_aic,train[1:31969,]$label,train[31970:40000,]$label)
+
+print(errors_aic)
+
+errors_all=rbind(errors_full,errors_null,errors_aic)
+
+
+```
+```{r}
+errors_all
+```
+
+
+
+
+On peut constater que logMSE et MAPE de modèle "poisson_lasso_selected_AIC" sont très petites par rapport les autre modèles. Donc il est le modèle qui a les meilleurs performances
+
+
+
+
+
+EXO4
+4.1)
+```{r}
+model_quasi = glm(label~X_train_interaction[,selected_features]-1 ,data=train ,family ="quasipoisson")
+summary(model_quasi)
+#Dispersion parameter for quasipoisson family taken to be 35.27498
+```
+
+On a trouvé la paramètre dispersion 34.12203.
+
+
+4.2)
+
+On voit que std.error pour chaque variable augmente par rapport les dernières modèles. Donc l'intervalle de confiance est plus large. Certaine variables deviennent non significatives. On sélectionne donc les variables qui restent encore significatives. 
+
+4.3)
+
+les résidus de déviance:
+```{r}
+X_beta=log(model_quasi$fitted.values)
+X_beta2=model_quasi$fitted.values
+
+residus=2*ifelse(train$label==0,0,(train$label*(log(train$label)-X_beta)-(train$label-X_beta2)))/34.12203
+
+residus
+```
+
+
+4.4)
+Eliminer les indivdus pour lesquels le résidus dépasse 4 en valeur absolu et refaire une estimation:
+```{r}
+residus2=2*abs(ifelse(train$label==0,0,(train$label*(log(train$label)-X_beta)-(train$label-X_beta2)))/34.12203)<4
+
+train_filtre=train[-which(residus2==FALSE),]
+
+model_quasi2 = glm(label~ NCD_0+NCD_1+NCD_2+ NCD_0+   NCD_1+   NCD_2+   NCD_3+   NCD_4+   NCD_5+   AI_0+    ASNA_0+  ASNA_5+  BL_0+    NAC_1+  
+ NAC_2+   NAC_3+   NAC_4+   NAC_5+   ASNAC_0+ ASNAC_1+ ASNAC_2+ NA_1+    NA_5+    ADL_0+   NAD_1+  
+NAD_2+   NAD_3+   NAD_4+   NAD_5 ,data=train_filtre,family ="quasipoisson")
+summary(model_quasi2)
+#Dispersion parameter for quasipoisson family taken to be 35.27498
+```
+
+On voit que la dispersion parameter est diminuée à 12.34157 et aussi le std.error des variables sont plus petit qu'avant. Donc ce nouveau modèle a des meilleures performances que les précédents. 
+
